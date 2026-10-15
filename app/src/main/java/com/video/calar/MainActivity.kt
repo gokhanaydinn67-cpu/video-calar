@@ -5,6 +5,7 @@ import android.app.PictureInPictureParams
 import android.content.ComponentName
 import android.content.ContentUris
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -183,6 +184,15 @@ fun formatSize(bytes: Long): String {
     } else {
         "%.0f MB".format(bytes / 1_048_576.0)
     }
+}
+
+fun openExternal(context: Context, uri: Uri?) {
+    if (uri == null) return
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, "video/*")
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, "Oynatıcı seç"))
 }
 
 class MainActivity : ComponentActivity() {
@@ -627,8 +637,7 @@ fun PlayerApp() {
             )
         }
     }
-}
-@Composable
+}@Composable
 fun PlaylistsTab(
     videos: List<Video>,
     playlists: Map<String, List<Long>>,
@@ -926,20 +935,6 @@ fun VideoPlayerScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f)
                     )
-                    IconButton(onClick = onToggleFullscreen) {
-                        Icon(
-                            if (fullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
-                            contentDescription = "Tam ekran",
-                            tint = Color.White
-                        )
-                    }
-                    IconButton(onClick = onPip) {
-                        Icon(
-                            Icons.Rounded.PictureInPicture,
-                            contentDescription = "Küçük pencere",
-                            tint = Color.White
-                        )
-                    }
                 }
 
                 Column(
@@ -1030,7 +1025,37 @@ fun VideoPlayerScreen(
                             )
                         }
                     }
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(onClick = onToggleFullscreen) {
+                            Icon(
+                                if (fullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                                contentDescription = "Tam ekran",
+                                tint = Color.White
+                            )
+                        }
+                        IconButton(onClick = onPip) {
+                            Icon(
+                                Icons.Rounded.PictureInPicture,
+                                contentDescription = "Küçük pencere",
+                                tint = Color.White
+                            )
+                        }
+                        IconButton(onClick = {
+                            openExternal(context, controller.currentMediaItem?.localConfiguration?.uri)
+                        }) {
+                            Icon(
+                                Icons.Rounded.OpenInNew,
+                                contentDescription = "Harici oynatıcıda aç",
+                                tint = Color.White
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
             }
         }
@@ -1107,23 +1132,5 @@ fun VideoThumb(video: Video, width: Dp, height: Dp) {
             .size(width, height)
             .clip(RoundedCornerShape(10.dp))
             .background(
-                Brush.linearGradient(listOf(Color(0xFF4A3478), Color(0xFF1C1C28)))
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        if (bmp != null) {
-            Image(
-                bitmap = bmp.asImageBitmap(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
-            Icon(
-                Icons.Rounded.Movie,
-                contentDescription = null,
-                tint = Color.White.copy(alpha = 0.7f)
-            )
-        }
-    }
-}
+                Brush.linearGradient(listOf(Color(0xFF4A3478), Co
+
