@@ -1,15 +1,21 @@
 package com.video.calar
 
 import android.Manifest
+import android.app.PictureInPictureParams
 import android.content.ComponentName
 import android.content.ContentUris
 import android.content.Context
+import android.content.SharedPreferences
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.util.Rational
 import android.util.Size
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -24,9 +30,12 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,7 +50,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -50,6 +61,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -60,6 +74,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+const val MODE_NONE = 0
+const val MODE_SEEK = 1
+const val MODE_BRIGHTNESS = 2
+const val MODE_VOLUME = 3
 
 data class Video(
     val id: Long,
@@ -74,6 +95,35 @@ enum class SortMode(val label: String) {
     NAME("Ada göre"),
     SIZE("Boyuta göre"),
     DATE("Tarihe göre")
+}
+
+object PlaylistStore {
+    private const val PREFS = "playlists"
+    private const val KEY_NAMES = "names"
+
+    fun load(context: Context): Map<String, List<Long>> {
+        val prefs: SharedPreferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val names = prefs.getStringSet(KEY_NAMES, emptySet()) ?: emptySet()
+        return names.sorted().associateWith { name ->
+            prefs.getString("p_$name", "")
+                .orEmpty()
+                .split(",")
+                .filter { it.isNotBlank() }
+                .map { it.toLong() }
+        }
+    }
+
+    fun save(context: Context, data: Map<String, List<Long>>) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val editor = prefs.edit()
+        val old = prefs.getStringSet(KEY_NAMES, emptySet()) ?: emptySet()
+        old.forEach { editor.remove("p_$it") }
+        editor.putStringSet(KEY_NAMES, data.keys.toSet())
+        data.forEach { (name, ids) ->
+            editor.putString("p_$name", ids.joinToString(","))
+        }
+        editor.apply()
+    }
 }
 
 fun Video.toMediaItem(): MediaItem =
@@ -132,6 +182,9 @@ fun formatSize(bytes: Long): String = when {
 }
 
 class MainActivity : ComponentActivity() {
+    val inPip = mutableStateOf(false)
+    var pipAllowed = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
@@ -139,6 +192,25 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
         setContent { MuzikTheme { PlayerApp() } }
+    }
+
+    fun enterPip() {
+        enterPictureInPictureMode(
+            PictureInPictureParams.Builder().setAspectRatio(Rational(16, 9)).build()
+        )
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if (pipAllowed) enterPip()
+    }
+
+    override fun onPictureInPictureModeChanged(
+        isInPictureInPictureMode: Boolean,
+        newConfig: Configuration
+    ) {
+        super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
+        inPip.value = isInPictureInPictureMode
     }
 }
 
@@ -160,6 +232,7 @@ fun MuzikTheme(content: @Composable () -> Unit) {
 @Composable
 fun PlayerApp() {
     val context = LocalContext.current
+    val activity = context as? MainActivity
     val scope = rememberCoroutineScope()
     val videoPerm = if (Build.VERSION.SDK_INT >= 33)
         Manifest.permission.READ_MEDIA_VIDEO
@@ -204,13 +277,49 @@ fun PlayerApp() {
         }
     }
 
+    var playlists by remember { mutableStateOf(PlaylistStore.load(context)) }
+    fun savePlaylists(newMap: Map<String, List<Long>>) {
+        playlists = newMap
+        PlaylistStore.save(context, newMap)
+    }
+    var openPlaylist by remember { mutableStateOf<String?>(null) }
+    var creating by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
+    var addTarget by remember { mutableStateOf<Video?>(null) }
+
     var tab by remember { mutableStateOf(0) }
     var controller by remember { mutableStateOf<MediaController?>(null) }
+    var isPlaying by remember { mutableStateOf(false) }
     var currentId by remember { mutableStateOf<String?>(null) }
     var currentTitle by remember { mutableStateOf("") }
     var showPlayer by remember { mutableStateOf(false) }
+    var fullscreen by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = showPlayer) { showPlayer = false }
+    BackHandler(enabled = showPlayer) {
+        if (fullscreen) fullscreen = false else showPlayer = false
+    }
+
+    LaunchedEffect(showPlayer, isPlaying) {
+        activity?.pipAllowed = showPlayer && isPlaying
+        if (!showPlayer) fullscreen = false
+    }
+
+    DisposableEffect(fullscreen) {
+        val w = activity?.window
+        if (activity != null && w != null) {
+            val ctrl = WindowCompat.getInsetsController(w, w.decorView)
+            if (fullscreen) {
+                activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                ctrl.hide(WindowInsetsCompat.Type.systemBars())
+                ctrl.systemBarsBehavior =
+                    WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            } else {
+                activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                ctrl.show(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+        onDispose { }
+    }
 
     DisposableEffect(Unit) {
         val token = SessionToken(context, ComponentName(context, PlayerService::class.java))
@@ -230,19 +339,24 @@ fun PlayerApp() {
             onDispose { }
         } else {
             val listener = object : Player.Listener {
+                override fun onIsPlayingChanged(playing: Boolean) {
+                    isPlaying = playing
+                }
+
                 override fun onMediaItemTransition(item: MediaItem?, reason: Int) {
                     currentId = item?.mediaId
                     currentTitle = item?.mediaMetadata?.title?.toString() ?: ""
                 }
             }
             c.addListener(listener)
+            isPlaying = c.isPlaying
             currentId = c.currentMediaItem?.mediaId
             currentTitle = c.currentMediaItem?.mediaMetadata?.title?.toString() ?: ""
             onDispose { c.removeListener(listener) }
         }
     }
 
-    fun playList(list: List<Video>, index: Int) {
+    fun playQueue(list: List<Video>, index: Int) {
         val c = controller ?: return
         c.setMediaItems(list.map { it.toMediaItem() }, index, 0L)
         c.prepare()
@@ -255,19 +369,50 @@ fun PlayerApp() {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
-                NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                    NavigationBarItem(
-                        selected = tab == 0,
-                        onClick = { tab = 0 },
-                        icon = { Icon(Icons.Rounded.VideoLibrary, contentDescription = null) },
-                        label = { Text("Videolar") }
-                    )
-                    NavigationBarItem(
-                        selected = tab == 1,
-                        onClick = { tab = 1 },
-                        icon = { Icon(Icons.Rounded.PlaylistPlay, contentDescription = null) },
-                        label = { Text("Listeler") }
-                    )
+                Column {
+                    if (c != null && currentTitle.isNotEmpty() && !showPlayer) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface,
+                            tonalElevation = 6.dp,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showPlayer = true }
+                                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    currentTitle,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(onClick = { if (isPlaying) c.pause() else c.play() }) {
+                                    Icon(
+                                        if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                        contentDescription = "Oynat / Duraklat"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                        NavigationBarItem(
+                            selected = tab == 0,
+                            onClick = { tab = 0 },
+                            icon = { Icon(Icons.Rounded.VideoLibrary, contentDescription = null) },
+                            label = { Text("Videolar") }
+                        )
+                        NavigationBarItem(
+                            selected = tab == 1,
+                            onClick = { tab = 1 },
+                            icon = { Icon(Icons.Rounded.PlaylistPlay, contentDescription = null) },
+                            label = { Text("Listeler") }
+                        )
+                    }
                 }
             }
         ) { padding ->
@@ -302,7 +447,7 @@ fun PlayerApp() {
                             Modifier
                                 .fillMaxWidth()
                                 .horizontalScroll(rememberScrollState())
-                                .padding(horizontal = 20.dp),
+                                .padding(horizontal = 20.dp)
                         ) {
                             SortMode.values().forEach { mode ->
                                 FilterChip(
@@ -334,141 +479,17 @@ fun PlayerApp() {
                                         video = video,
                                         active = video.id.toString() == currentId,
                                         onClick = {
-                                            playList(sorted, index)
+                                            playQueue(sorted, index)
                                             showPlayer = true
+                                        },
+                                        trailing = {
+                                            IconButton(onClick = { addTarget = video }) {
+                                                Icon(
+                                                    Icons.Rounded.PlaylistAdd,
+                                                    contentDescription = "Listeye ekle"
+                                                )
+                                            }
                                         }
                                     )
                                 }
-                            }
-                        }
-                    }
-                } else {
-                    Column(
-                        Modifier.fillMaxSize(),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            "Çalma listeleri bir sonraki adımda eklenecek",
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-                        )
-                    }
-                }
-            }
-        }
-
-        AnimatedVisibility(
-            visible = showPlayer && c != null,
-            modifier = Modifier.fillMaxSize(),
-            enter = slideInVertically(initialOffsetY = { it }),
-            exit = slideOutVertically(targetOffsetY = { it })
-        ) {
-            if (c != null) {
-                VideoPlayerScreen(
-                    controller = c,
-                    title = currentTitle,
-                    onClose = { showPlayer = false }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun VideoPlayerScreen(controller: MediaController, title: String, onClose: () -> Unit) {
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(
-            factory = { ctx -> PlayerView(ctx).apply { useController = true } },
-            update = { view -> view.player = controller },
-            modifier = Modifier.fillMaxSize()
-        )
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onClose) {
-                Icon(Icons.Rounded.ArrowBack, contentDescription = "Geri", tint = Color.White)
-            }
-            Text(
-                title,
-                color = Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-        }
-    }
-}
-
-@Composable
-fun VideoRow(video: Video, active: Boolean, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        VideoThumb(video, 128.dp, 72.dp)
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                video.name,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                fontWeight = FontWeight.Medium,
-                color = if (active) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onBackground
-            )
-            Text(
-                "${formatTime(video.duration)} · ${formatSize(video.size)}",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
-            )
-        }
-    }
-}
-
-@Composable
-fun VideoThumb(video: Video, width: Dp, height: Dp) {
-    val context = LocalContext.current
-    val bitmap by produceState<Bitmap?>(initialValue = null, video.id) {
-        value = withContext(Dispatchers.IO) {
-            if (Build.VERSION.SDK_INT >= 29) {
-                try {
-                    context.contentResolver.loadThumbnail(video.uri, Size(480, 270), null)
-                } catch (e: Exception) {
-                    null
-                }
-            } else null
-        }
-    }
-    val bmp = bitmap
-    Box(
-        Modifier
-            .size(width, height)
-            .clip(RoundedCornerShape(10.dp))
-            .background(
-                Brush.linearGradient(listOf(Color(0xFF4A3478), Color(0xFF1C1C28)))
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        if (bmp != null) {
-            Image(
-                bitmap = bmp.asImageBitmap(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
-            Icon(
-                Icons.Rounded.Movie,
-                contentDescription = null,
-                tint = Color.White.copy(alpha = 0.7f)
-            )
-        }
-    }
-}
+                          
