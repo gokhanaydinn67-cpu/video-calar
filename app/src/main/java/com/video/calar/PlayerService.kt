@@ -1,6 +1,8 @@
 package com.video.calar
 
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 
@@ -10,7 +12,12 @@ class PlayerService : MediaSessionService() {
 
     override fun onCreate() {
         super.onCreate()
-        val player = ExoPlayer.Builder(this).build()
+        val extractors = DefaultExtractorsFactory()
+            .setConstantBitrateSeekingEnabled(true)
+            .setConstantBitrateSeekingAlwaysEnabled(true)
+        val player = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(this, extractors))
+            .build()
         session = MediaSession.Builder(this, player).build()
     }
 
