@@ -410,16 +410,17 @@ fun VideoRow(
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
+            .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        VideoThumb(video, 128.dp, 72.dp)
-        Spacer(Modifier.width(14.dp))
+        VideoThumb(video, 112.dp, 64.dp)
+        Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 video.name,
-                maxLines = 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
                 color = if (active) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onBackground
