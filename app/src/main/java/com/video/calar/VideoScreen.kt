@@ -107,6 +107,7 @@ fun VideoPlayerScreen(
     var isPlaying by remember { mutableStateOf(controller.isPlaying) }
     var showControls by remember { mutableStateOf(true) }
     var sliderDrag by remember { mutableStateOf<Float?>(null) }
+    var pendingSeek by remember { mutableStateOf<Long?>(null) }
     var gestureText by remember { mutableStateOf("") }
     var mode by remember { mutableIntStateOf(MODE_NONE) }
     var accX by remember { mutableFloatStateOf(0f) }
@@ -132,7 +133,20 @@ fun VideoPlayerScreen(
             position = controller.currentPosition.coerceAtLeast(0L)
             duration = controller.duration.coerceAtLeast(0L)
             isPlaying = controller.isPlaying
+            // Player yeni konuma gelince bekleyen sarma hedefini bırak.
+            val pending = pendingSeek
+            if (pending != null && abs(position - pending) < 1000L) {
+                pendingSeek = null
+            }
             delay(250)
+        }
+    }
+
+    // Player hiç konum bildirmezse bile çubuk sonsuza kadar takılı kalmasın.
+    LaunchedEffect(pendingSeek) {
+        if (pendingSeek != null) {
+            delay(2000)
+            pendingSeek = null
         }
     }
 
@@ -183,7 +197,10 @@ fun VideoPlayerScreen(
                         },
                         onDragEnd = {
                             if (mode == MODE_SEEK) {
-                                seekTarget?.let { controller.seekTo(it) }
+                                seekTarget?.let {
+                                    pendingSeek = it
+                                    controller.seekTo(it)
+                                }
                             }
                             seekTarget = null
                             mode = MODE_NONE
@@ -275,12 +292,13 @@ fun VideoPlayerScreen(
                 ) {
                     Slider(
                         value = sliderDrag
-                            ?: seekTarget?.toFloat()
+                            ?: pendingSeek?.toFloat()
                             ?: position.toFloat().coerceAtMost(max),
                         onValueChange = { sliderDrag = it },
                         onValueChangeFinished = {
                             val d = sliderDrag
                             if (d != null) {
+                                pendingSeek = d.toLong()
                                 controller.seekTo(d.toLong())
                             }
                             sliderDrag = null
@@ -293,7 +311,7 @@ fun VideoPlayerScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            formatTime((sliderDrag?.toLong()) ?: seekTarget ?: position),
+                            formatTime(sliderDrag?.toLong() ?: pendingSeek ?: position),
                             fontSize = 12.sp,
                             color = Color.White.copy(alpha = 0.7f)
                         )
