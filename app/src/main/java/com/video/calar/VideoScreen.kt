@@ -31,7 +31,6 @@ import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.Movie
-import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PictureInPicture
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -114,6 +113,8 @@ fun VideoPlayerScreen(
     var accY by remember { mutableFloatStateOf(0f) }
     var startX by remember { mutableFloatStateOf(0f) }
     var areaWidth by remember { mutableIntStateOf(0) }
+    var seekBase by remember { mutableLongStateOf(0L) }
+    var seekTarget by remember { mutableStateOf<Long?>(null) }
 
     // Oynatıcı açıkken ekranın kapanıp kilitlenmesini engeller.
     // Ekran ayrıldığında eski ayara döner.
@@ -177,17 +178,19 @@ fun VideoPlayerScreen(
                             accX = 0f
                             accY = 0f
                             mode = MODE_NONE
+                            seekBase = controller.currentPosition.coerceAtLeast(0L)
+                            seekTarget = null
                         },
                         onDragEnd = {
                             if (mode == MODE_SEEK) {
-                                val target = (controller.currentPosition + (accX * 200f).toLong())
-                                    .coerceIn(0L, controller.duration.coerceAtLeast(0L))
-                                controller.seekTo(target)
+                                seekTarget?.let { controller.seekTo(it) }
                             }
+                            seekTarget = null
                             mode = MODE_NONE
                             gestureText = ""
                         },
                         onDragCancel = {
+                            seekTarget = null
                             mode = MODE_NONE
                             gestureText = ""
                         },
@@ -205,8 +208,9 @@ fun VideoPlayerScreen(
                                 }
                             }
                             if (mode == MODE_SEEK) {
-                                val target = (controller.currentPosition + (accX * 200f).toLong())
-                                    .coerceIn(0L, controller.duration.coerceAtLeast(0L))
+                                val dur = controller.duration.coerceAtLeast(0L)
+                                val target = (seekBase + (accX * 200f).toLong()).coerceIn(0L, dur)
+                                seekTarget = target
                                 gestureText = "Sar: ${formatTime(target)}"
                             } else if (mode == MODE_VOLUME) {
                                 volume = (volume - drag.y / 400f).coerceIn(0f, 1f)
@@ -270,7 +274,9 @@ fun VideoPlayerScreen(
                         .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
                     Slider(
-                        value = sliderDrag ?: position.toFloat().coerceAtMost(max),
+                        value = sliderDrag
+                            ?: seekTarget?.toFloat()
+                            ?: position.toFloat().coerceAtMost(max),
                         onValueChange = { sliderDrag = it },
                         onValueChangeFinished = {
                             val d = sliderDrag
@@ -287,7 +293,7 @@ fun VideoPlayerScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            formatTime(sliderDrag?.toLong() ?: position),
+                            formatTime((sliderDrag?.toLong()) ?: seekTarget ?: position),
                             fontSize = 12.sp,
                             color = Color.White.copy(alpha = 0.7f)
                         )
@@ -355,16 +361,9 @@ fun VideoPlayerScreen(
                     Spacer(Modifier.height(4.dp))
                     Row(
                         Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(onClick = onToggleFullscreen) {
-                            Icon(
-                                if (fullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
-                                contentDescription = "Tam ekran",
-                                tint = Color.White
-                            )
-                        }
                         IconButton(onClick = onPip) {
                             Icon(
                                 Icons.Rounded.PictureInPicture,
@@ -372,12 +371,10 @@ fun VideoPlayerScreen(
                                 tint = Color.White
                             )
                         }
-                        IconButton(onClick = {
-                            openExternal(context, controller.currentMediaItem?.localConfiguration?.uri)
-                        }) {
+                        IconButton(onClick = onToggleFullscreen) {
                             Icon(
-                                Icons.Rounded.OpenInNew,
-                                contentDescription = "Harici oynatıcıda aç",
+                                if (fullscreen) Icons.Rounded.FullscreenExit else Icons.Rounded.Fullscreen,
+                                contentDescription = "Tam ekran",
                                 tint = Color.White
                             )
                         }
