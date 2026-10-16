@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.media.AudioManager
 import android.os.Build
 import android.util.Size
+import android.view.WindowManager
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -44,6 +45,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -113,6 +115,15 @@ fun VideoPlayerScreen(
     var startX by remember { mutableFloatStateOf(0f) }
     var areaWidth by remember { mutableIntStateOf(0) }
 
+    // Oynatıcı açıkken ekranın kapanıp kilitlenmesini engeller.
+    // Ekran ayrıldığında eski ayara döner.
+    DisposableEffect(Unit) {
+        activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
     val max = duration.coerceAtLeast(1L).toFloat()
 
     LaunchedEffect(controller) {
@@ -141,8 +152,12 @@ fun VideoPlayerScreen(
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
-            factory = { ctx -> PlayerView(ctx).apply { useController = false } },
-            update = { view -> view.player = controller },
+            factory = { ctx ->
+                PlayerView(ctx).apply { useController = false }
+            },
+            update = { view ->
+                view.player = controller
+            },
             modifier = Modifier.fillMaxSize()
         )
 
@@ -151,7 +166,9 @@ fun VideoPlayerScreen(
                 .fillMaxSize()
                 .onSizeChanged { areaWidth = it.width }
                 .pointerInput(Unit) {
-                    detectTapGestures(onTap = { showControls = !showControls })
+                    detectTapGestures(
+                        onTap = { showControls = !showControls }
+                    )
                 }
                 .pointerInput(Unit) {
                     detectDragGestures(
@@ -227,9 +244,16 @@ fun VideoPlayerScreen(
                     .padding(horizontal = 8.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     IconButton(onClick = onClose) {
-                        Icon(Icons.Rounded.ArrowBack, contentDescription = "Geri", tint = Color.White)
+                        Icon(
+                            Icons.Rounded.ArrowBack,
+                            contentDescription = "Geri",
+                            tint = Color.White
+                        )
                     }
                     Text(
                         title,
@@ -240,19 +264,28 @@ fun VideoPlayerScreen(
                     )
                 }
 
-                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                ) {
                     Slider(
                         value = sliderDrag ?: position.toFloat().coerceAtMost(max),
                         onValueChange = { sliderDrag = it },
                         onValueChangeFinished = {
                             val d = sliderDrag
-                            if (d != null) controller.seekTo(d.toLong())
+                            if (d != null) {
+                                controller.seekTo(d.toLong())
+                            }
                             sliderDrag = null
                         },
                         valueRange = 0f..max,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
                         Text(
                             formatTime(sliderDrag?.toLong() ?: position),
                             fontSize = 12.sp,
@@ -289,7 +322,9 @@ fun VideoPlayerScreen(
                             )
                         }
                         FilledIconButton(
-                            onClick = { if (isPlaying) controller.pause() else controller.play() },
+                            onClick = {
+                                if (isPlaying) controller.pause() else controller.play()
+                            },
                             modifier = Modifier.size(72.dp)
                         ) {
                             Icon(
@@ -423,7 +458,9 @@ fun VideoThumb(video: Video, width: Dp, height: Dp) {
         Modifier
             .size(width, height)
             .clip(RoundedCornerShape(10.dp))
-            .background(Brush.linearGradient(listOf(Color(0xFF4A3478), Color(0xFF1C1C28)))),
+            .background(
+                Brush.linearGradient(listOf(Color(0xFF4A3478), Color(0xFF1C1C28)))
+            ),
         contentAlignment = Alignment.Center
     ) {
         if (bmp != null) {
